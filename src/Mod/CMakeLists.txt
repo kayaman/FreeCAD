@@ -131,3 +131,9 @@ endif(BUILD_TUX)
 if(BUILD_WEB)
     add_subdirectory(Web)
 endif(BUILD_WEB)
+
+# Optional GUI assistant; no additional Python dependencies.
+option(BUILD_AI_ASSISTANT "Build the AI assistant panel" ON)
+if(BUILD_GUI AND BUILD_AI_ASSISTANT)
+  add_subdirectory(AIAssistant)
+endif()
