@@ -18,10 +18,13 @@ document.
 
 ## Current delivery
 
-This workspace contains a **source overlay, not a full FreeCAD checkout or a
-published GitHub fork**. The parent `src/Mod/CMakeLists.txt` was retrieved from
-upstream and includes the module registration. `tools/fork_with_ai.py` applies
-that registration to an actual checkout without replacing its other CMake entries.
+The assistant is published on the `ai-assistant` branch of
+[kayaman/FreeCAD](https://github.com/kayaman/FreeCAD/tree/ai-assistant), a fork of
+upstream FreeCAD. Each release attaches `AIAssistant-<version>.zip` for installing
+into an existing FreeCAD (see below). No upstream pull request has been opened.
+
+The module is developed as a source overlay. `tools/fork_with_ai.py` applies its
+CMake registration to an actual checkout without replacing other CMake entries.
 
 Create your fork, apply the assistant on an `ai-assistant` branch, test, commit
 and publish it from a shell with GitHub connectivity:
@@ -41,7 +44,8 @@ python3 FreeCAD/tools/fork_with_ai.py --apply-only --checkout /path/to/FreeCAD
 
 ## Use in an existing FreeCAD installation
 
-Copy the entire `src/Mod/AIAssistant` directory into the user `Mod` directory
+Unzip a release's `AIAssistant-<version>.zip`, or copy the entire
+`src/Mod/AIAssistant` directory, into the user `Mod` directory
 reported by `App.getUserAppDataDir()` in FreeCAD's Python console, then restart
 FreeCAD. This does not require recompiling FreeCAD. The layout must be:
 
@@ -380,7 +384,7 @@ was not completed. Copilot inside the Flatpak is therefore untested.
 
 Process supervision and worker discovery have not been exercised on Windows or
 macOS. A build and install from a complete FreeCAD source checkout has not been
-validated, and the fork has not been published.
+validated.
 
 The additions use `LGPL-2.1-or-later`, matching FreeCAD. They were created with
 AI assistance (GPT-6 / Codex for the initial module; Claude Opus 5.5 / Claude
