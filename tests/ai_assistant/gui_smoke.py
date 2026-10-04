@@ -277,6 +277,24 @@ def run():
             panel._send()
             return panel.task
 
+        from freecad_ai.gui import QtCore, QtGui, QtWidgets
+
+        def press(key, modifiers=QtCore.Qt.NoModifier):
+            QtWidgets.QApplication.sendEvent(panel.prompt, QtGui.QKeyEvent(
+                QtCore.QEvent.KeyPress, key, modifiers, "\r"))
+
+        press(QtCore.Qt.Key_Return)
+        assert not fake.sent and panel.task is None  # Empty prompt: nothing sent, no error.
+        panel.prompt.setPlainText("Line one")
+        panel.prompt.moveCursor(QtGui.QTextCursor.End)
+        press(QtCore.Qt.Key_Return, QtCore.Qt.ShiftModifier)
+        assert not fake.sent and panel.prompt.toPlainText() == "Line one\n"
+        press(QtCore.Qt.Key_Return)
+        assert len(fake.sent) == 1 and panel.prompt.toPlainText() == ""
+        panel._stop()
+        fake.sent.clear()
+        checks.append("Enter sends; Shift+Enter adds a line; empty prompt ignored")
+
         task = send("Make the box 50 mm long")
         assert task.state is S.THINKING and len(fake.sent) == 1
         fake.deliver(Proposal("Resize", "doc.AIBox.Length = 50"))

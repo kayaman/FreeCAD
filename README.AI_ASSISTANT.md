@@ -150,7 +150,8 @@ completion, timeout, cancellation, startup failure and application exit.
 
 ## Modeling
 
-Describe the model and include required dimensions, for example:
+Describe the model and include required dimensions, then press **Enter** to
+send (**Shift+Enter** starts a new line; the Send button also works), for example:
 
 > Create a parametric box 40 × 30 × 10 mm. Add a centered 5 mm cylindrical hole
 > through the 10 mm thickness.

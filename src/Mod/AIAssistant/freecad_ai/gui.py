@@ -584,6 +584,28 @@ class DesignBriefDialog(QtWidgets.QDialog):
         self.accept()
 
 
+class PromptKeys(QtCore.QObject):
+    """Enter sends the prompt; Shift+Enter inserts a new line."""
+
+    def __init__(self, prompt, send):
+        super().__init__(prompt)
+        self.prompt = prompt
+        self.send = send
+
+    def eventFilter(self, watched, event):
+        if event.type() != QtCore.QEvent.KeyPress or event.key() not in (
+                QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
+            return False
+        modifiers = event.modifiers() & ~QtCore.Qt.KeypadModifier
+        if modifiers == QtCore.Qt.ShiftModifier:
+            return False  # The text box inserts the line break.
+        if modifiers != QtCore.Qt.NoModifier:
+            return False
+        if self.prompt.toPlainText().strip():
+            self.send()
+        return True  # An empty prompt is ignored rather than reported as an error.
+
+
 class _DocumentObserver:
     """Forwards App document events; holds the panel weakly."""
     def __init__(self, panel):
@@ -638,8 +660,11 @@ class AssistantPanel(QtWidgets.QDockWidget):
         self.transcript.document().setMaximumBlockCount(1500)
         layout.addWidget(self.transcript, 2)
         self.prompt = QtWidgets.QPlainTextEdit()
-        self.prompt.setPlaceholderText("Create a box 40 × 30 × 10 mm, then drill a 5 mm hole…")
+        self.prompt.setPlaceholderText("Create a box 40 × 30 × 10 mm, then drill a 5 mm hole… "
+                                       "(Enter to send, Shift+Enter for a new line)")
         self.prompt.setMaximumHeight(100)
+        self.prompt_keys = PromptKeys(self.prompt, self._send)
+        self.prompt.installEventFilter(self.prompt_keys)
         layout.addWidget(self.prompt)
         self.share_context = QtWidgets.QCheckBox("Send model summary and selection to provider")
         self.share_context.setChecked(True)
