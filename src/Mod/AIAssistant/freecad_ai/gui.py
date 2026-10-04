@@ -25,6 +25,8 @@ from .core import (API_ENVIRONMENT_VARIABLES, MAX_BRIEF_CHARS, PROVIDER_NAMES, A
                    BriefOverflow, NativeEvents, ProviderSettings, load_settings, save_settings,
                    validate_native_login)
 from .document import DocumentSnapshot, execute_step, external_links, model_context
+from .chat_view import (ActionBar, ChatView, Composer, Theme, ThemedWidget, icon as chat_icon,
+                        source_palette)
 from .execution import apply_delta, make_worker_job
 from .validation import fingerprint, summarize
 from .processes import START_FAILED, ProcessSupervisor
@@ -33,7 +35,32 @@ from .session import Outcome, SessionRegistry, TaskState, UndoRefused, plan_undo
 
 PARAM_PATH = "User parameter:BaseApp/Preferences/Mod/AIAssistant"
 WORKER_TIMEOUT_SECONDS = 300
+EXAMPLES = ("Create a box 40 × 30 × 10 mm with a 5 mm hole through the middle",
+            "Add 2 mm fillets to the selected edges",
+            "Make the selected pad 15 mm taller")
+EMPTY_NOTE = ("Steps run in a separate FreeCAD process and can be undone. Generated code has "
+              "your user permissions. Enter sends; Shift+Enter adds a line.")
+ABOUT_AUTOMATIC = (
+    "Automatic steps run in a separate FreeCAD process on a copy of your document, so Stop "
+    "works at any time; results are applied as one undoable step. This isolates crashes but "
+    "is not a security sandbox: generated code has your user permissions.\n\n"
+    "With automatic steps off (Review), each step waits for you to read its code; it then "
+    "runs inside FreeCAD and cannot be stopped midway.\n\n"
+    "The Context chip controls whether a bounded model summary and your selection are sent. "
+    "Messages and summaries already sent remain part of the chat; New chat starts clean.")
 _panel = None
+
+
+# Bookkeeping properties that change with almost every edit; not worth showing.
+_INTERNAL_PROPERTIES = {"Label2", "History", "ShapeMaterial", "Visibility", "AddSubShape",
+                        "SuppressedShape", "PreviewShape", "InternalShape", "Shape"}
+
+
+def visible_properties(change):
+    """The properties a person would recognize as edited, for a step card."""
+    names = [name for name in sorted(change["properties"])
+             if not name.startswith("_") and name not in _INTERNAL_PROPERTIES]
+    return names + (["expressions"] if change.get("expressions") else [])
 
 
 def native_environment():
@@ -647,97 +674,98 @@ class AssistantPanel(QtWidgets.QDockWidget):
         self._received_chars = 0
         self.transport = None
         self.attach_transport(Transport(self))
-        container = QtWidgets.QWidget()
+        container = ThemedWidget()
+        container.on_theme.append(lambda theme: self._paint_header_icons(theme))
         layout = QtWidgets.QVBoxLayout(container)
-        self.info = QtWidgets.QLabel()
-        self.info.setWordWrap(True)
-        layout.addWidget(self.info)
-        self.status = QtWidgets.QLabel()
-        self.status.setWordWrap(True)
-        layout.addWidget(self.status)
-        self.transcript = QtWidgets.QPlainTextEdit()
-        self.transcript.setReadOnly(True)
-        self.transcript.document().setMaximumBlockCount(1500)
-        layout.addWidget(self.transcript, 2)
-        self.prompt = QtWidgets.QPlainTextEdit()
-        self.prompt.setPlaceholderText("Create a box 40 × 30 × 10 mm, then drill a 5 mm hole… "
-                                       "(Enter to send, Shift+Enter for a new line)")
-        self.prompt.setMaximumHeight(100)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self._build_header())
+        self.chat = ChatView()
+        self.chat.example_chosen.connect(lambda text: self.composer.set_text(text))
+        layout.addWidget(self.chat, 1)
+        self.status = self.chat.status_line
+        self.provider_banner = ActionBar()
+        self.provider_banner.stop_button.setVisible(False)
+        self.provider_banner.continue_button.setText("Settings")
+        self.provider_banner.continue_button.clicked.connect(self._settings)
+        self.action_bar = ActionBar()
+        layout.addWidget(self.provider_banner)
+        layout.addWidget(self.action_bar)
+        self.run_button = self.action_bar.run_button
+        self.continue_button = self.action_bar.continue_button
+        self.composer = Composer()
+        layout.addWidget(self.composer)
+        self.prompt = self.composer.input
         self.prompt_keys = PromptKeys(self.prompt, self._send)
         self.prompt.installEventFilter(self.prompt_keys)
-        layout.addWidget(self.prompt)
-        self.share_context = QtWidgets.QCheckBox("Send model summary and selection to provider")
-        self.share_context.setChecked(True)
-        layout.addWidget(self.share_context)
-        self.context_notice = QtWidgets.QLabel(
-            "New requests will not include the model summary. Messages and summaries already "
-            "sent remain part of this chat; use New chat to start a clean session.")
-        self.context_notice.setWordWrap(True)
-        self.context_notice.setVisible(False)
-        layout.addWidget(self.context_notice)
-        self.share_context.toggled.connect(lambda shared: self.context_notice.setVisible(not shared))
-        self.autonomous = QtWidgets.QCheckBox("Run modeling steps automatically (up to 6)")
-        self.autonomous.setChecked(True)
-        layout.addWidget(self.autonomous)
-        self.notice = QtWidgets.QLabel(
-            "Automatic steps run in a separate FreeCAD process, so Stop works at any time; it "
-            "isolates crashes but is not a security sandbox: generated code has your user "
-            "permissions. Turn off automatic steps to review code, which then runs inside "
-            "FreeCAD and cannot be stopped midway.")
-        self.notice.setWordWrap(True)
-        layout.addWidget(self.notice)
-        row = QtWidgets.QHBoxLayout()
-        self.send_button = QtWidgets.QPushButton("Send")
-        self.stop_button = QtWidgets.QPushButton("Stop")
-        self.continue_button = QtWidgets.QPushButton("Continue")
-        self.settings_button = QtWidgets.QPushButton("Settings")
-        self.brief_button = QtWidgets.QPushButton("Design brief…")
-        self.clear_button = QtWidgets.QPushButton("New chat")
-        for widget in (self.send_button, self.stop_button, self.continue_button,
-                       self.brief_button, self.settings_button, self.clear_button):
-            row.addWidget(widget)
-        layout.addLayout(row)
-        layout.addWidget(QtWidgets.QLabel("Task timeline"))
-        self.timeline = QtWidgets.QTreeWidget()
-        self.timeline.setHeaderLabels(["Step", "State", "Explanation"])
-        self.timeline.setRootIsDecorated(True)
-        self.timeline.currentItemChanged.connect(lambda current, previous: self._show_step())
-        layout.addWidget(self.timeline, 1)
-        self.step_tabs = QtWidgets.QTabWidget()
-        self.code = QtWidgets.QPlainTextEdit()
-        self.code.setReadOnly(True)
-        self.code.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont))
-        self.details = QtWidgets.QPlainTextEdit()
-        self.details.setReadOnly(True)
-        self.step_tabs.addTab(self.code, "Code")
-        self.step_tabs.addTab(self.details, "Result")
-        layout.addWidget(self.step_tabs, 1)
-        actions = QtWidgets.QHBoxLayout()
-        self.run_button = QtWidgets.QPushButton("Run reviewed code")
-        self.undo_button = QtWidgets.QPushButton("Undo last step")
-        self.undo_task_button = QtWidgets.QPushButton("Undo task")
-        actions.addWidget(self.run_button)
-        actions.addWidget(self.undo_button)
-        actions.addWidget(self.undo_task_button)
-        layout.addLayout(actions)
+        self.share_context = self.composer.context_chip
+        self.context_notice = self.composer.context_notice
+        self.autonomous = self.composer.auto_action
         self.setWidget(container)
-        self.send_button.clicked.connect(self._send)
-        self.stop_button.clicked.connect(self._stop)
+        self.composer.send_clicked.connect(self._send)
+        self.composer.stop_clicked.connect(self._stop)
+        self.action_bar.stop_button.clicked.connect(self._stop)
         self.continue_button.clicked.connect(self._continue)
-        self.settings_button.clicked.connect(self._settings)
-        self.brief_button.clicked.connect(lambda: self.open_brief())
-        self.clear_button.clicked.connect(self._clear)
         self.run_button.clicked.connect(self._run_reviewed)
-        self.undo_button.clicked.connect(lambda: self._undo("step"))
-        self.undo_task_button.clicked.connect(lambda: self._undo("task"))
         self._observer = _DocumentObserver(self)
         App.addDocumentObserver(self._observer)
-        self._update_info()
-        self._log("Assistant", "Configure a provider in Settings, then describe your model. "
-                  "Automatic steps are enabled; each successful step can be undone.")
-        self._refresh()
+        self._render_session()
         self.check_provider()
         QtWidgets.QApplication.instance().aboutToQuit.connect(self.shutdown)
+
+    def _build_header(self):
+        header = QtWidgets.QWidget()
+        header.setObjectName("assistantHeader")
+        header.setAttribute(QtCore.Qt.WA_StyledBackground, True)
+        row = QtWidgets.QHBoxLayout(header)
+        row.setContentsMargins(10, 6, 6, 6)
+        row.setSpacing(6)
+        self.status_dot = QtWidgets.QLabel()
+        self.status_dot.setFixedSize(12, 12)
+        row.addWidget(self.status_dot)
+        self.info = QtWidgets.QToolButton()
+        self.info.setObjectName("headerButton")
+        self.info.setAutoRaise(True)
+        self.info.setToolTip("Provider status. Click to open Settings.")
+        self.info.clicked.connect(self._settings)
+        row.addWidget(self.info)
+        self.document_label = QtWidgets.QLabel()
+        self.document_label.setObjectName("muted")
+        self.document_label.setSizePolicy(QtWidgets.QSizePolicy.Ignored,
+                                          QtWidgets.QSizePolicy.Preferred)
+        row.addWidget(self.document_label, 1)
+        self.new_chat_button = QtWidgets.QToolButton()
+        self.new_chat_button.setObjectName("headerButton")
+        self.new_chat_button.setAutoRaise(True)
+        self.new_chat_button.setToolTip("New chat")
+        self.new_chat_button.clicked.connect(self._clear)
+        row.addWidget(self.new_chat_button)
+        self.more_button = QtWidgets.QToolButton()
+        self.more_button.setObjectName("headerButton")
+        self.more_button.setAutoRaise(True)
+        self.more_button.setToolTip("More")
+        self.more_button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        menu = QtWidgets.QMenu(self.more_button)
+        self.brief_action = menu.addAction("Design brief…", lambda: self.open_brief())
+        menu.addSeparator()
+        self.undo_step_action = menu.addAction("Undo last step", lambda: self._undo("step"))
+        self.undo_task_action = menu.addAction("Undo task", lambda: self._undo("task"))
+        menu.addSeparator()
+        self.settings_action = menu.addAction("Settings…", self._settings)
+        menu.addAction("About automatic steps", self._about)
+        self.more_button.setMenu(menu)
+        row.addWidget(self.more_button)
+        self._paint_header_icons()
+        return header
+
+    def _paint_header_icons(self, theme=None):
+        color = (theme or Theme(source_palette(self))).text
+        self.new_chat_button.setIcon(chat_icon("plus", color))
+        self.more_button.setIcon(chat_icon("more", color))
+        self._update_info()
+
+    def _about(self):
+        QtWidgets.QMessageBox.information(self, "Automatic steps", ABOUT_AUTOMATIC)
 
     def attach_transport(self, transport):
         """Use transport for provider requests (tests attach a fake provider here)."""
@@ -767,12 +795,25 @@ class AssistantPanel(QtWidgets.QDockWidget):
         return self.task is not None and self.task.running
 
     def _update_info(self):
+        if not hasattr(self, "provider_banner"):
+            return  # Still building the panel.
         status = self.provider_status
-        text = "{} · {} · {}".format(PROVIDER_NAMES.get(self.settings.provider, "Provider"),
-                                     self.settings.model or "default model", describe_status(status))
-        if status is not None and status.state not in (Readiness.READY, Readiness.CHECKING):
-            text += "\n" + status.message
-        self.info.setText(text)
+        name = PROVIDER_NAMES.get(self.settings.provider, "Provider")
+        if self.settings.model:
+            name += " · " + self.settings.model
+        state = status.state if status is not None else Readiness.UNKNOWN
+        self.info.setText("{} · {}".format(name, state.value))
+        self.info.setToolTip("{}\n{}\nClick to open Settings.".format(
+            describe_status(status), status.message if status is not None else ""))
+        colors = {Readiness.READY: "#2da44e", Readiness.CHECKING: "#9a9a9a",
+                  Readiness.UNKNOWN: "#9a9a9a"}
+        color = QtGui.QColor(colors.get(state, "#d1242f"))
+        self.status_dot.setPixmap(chat_icon("dot", color, 12).pixmap(12, 12))
+        problem = state not in (Readiness.READY, Readiness.CHECKING, Readiness.UNKNOWN)
+        if problem and status is not None:
+            self.provider_banner.message.setText(status.message)
+            self.provider_banner.continue_button.setVisible(True)
+        self.provider_banner.setVisible(problem)
 
     def check_provider(self, use_cache=True):
         """Non-inference readiness check; runs when the panel opens and settings change."""
@@ -789,64 +830,65 @@ class AssistantPanel(QtWidgets.QDockWidget):
         self._update_info()
 
     def _log(self, speaker, text, session=None):
+        """Append to the session's typed transcript and, if visible, to the chat."""
         session = session or self.session
-        session.log(speaker, text)
+        kind = {"You": "user", "Assistant": "assistant", "FreeCAD": "notice",
+                "Error": "error"}.get(speaker, speaker)
+        session.log(kind, text)
         if session is self.session:
-            self.transcript.appendPlainText("{}: {}\n".format(speaker, text))
+            self._show_entry(kind, text)
+
+    def _show_entry(self, kind, payload):
+        if kind == "user":
+            self.chat.add_user(payload)
+        elif kind == "assistant":
+            self.chat.add_assistant(payload)
+        elif kind == "error":
+            self.chat.add_notice(payload, "error")
+        elif kind == "step":
+            step = self._find_step(payload)
+            if step is not None:
+                card = self.chat.add_step(step.id)
+                card.run_requested.connect(lambda step_id: self._run_reviewed())
+                card.undo_requested.connect(lambda step_id: self._undo("step"))
+                self._update_card(step)
+        else:
+            self.chat.add_notice(payload, "info")
 
     def _render_session(self):
-        self.transcript.clear()
-        for speaker, text in self.session.transcript:
-            self.transcript.appendPlainText("{}: {}\n".format(speaker, text))
-        self.code.clear()
-        self.details.clear()
+        self.chat.clear()
+        for kind, payload in self.session.transcript:
+            self._show_entry(kind, payload)
+        if not any(kind in ("user", "assistant") for kind, _ in self.session.transcript):
+            self.chat.show_empty_state(EXAMPLES, EMPTY_NOTE)
+        doc = self.session.document
+        self.document_label.setText(doc.Label if doc is not None else "No document")
         self._refresh()
 
     def _refresh(self):
         task = self.task
         state = task.state if task is not None else S.IDLE
         running = state in (S.CHECKING_PROVIDER, S.THINKING, S.EXECUTING, S.APPLYING)
-        for widget in (self.send_button, self.settings_button, self.clear_button,
-                       self.brief_button, self.share_context, self.autonomous, self.undo_button,
-                       self.undo_task_button):
-            widget.setEnabled(not running)
-        self.stop_button.setEnabled(running or state in (S.PAUSED, S.AWAITING_REVIEW))
-        self.continue_button.setVisible(state is S.PAUSED)
-        self.run_button.setEnabled(state is S.AWAITING_REVIEW)
-        names = {S.CHECKING_PROVIDER: "Checking provider…", S.THINKING: "Thinking…",
-                 S.EXECUTING: "Running modeling step…", S.APPLYING: "Applying changes…",
-                 S.AWAITING_REVIEW: "Review the proposed code, then run it or stop.",
-                 S.PAUSED: "Paused. Continue resumes this task."}
-        self.status.setText(names.get(state, ""))
-        self._render_timeline()
-
-    # Timeline ---------------------------------------------------------------------
-
-    def _render_timeline(self):
-        selected = self._selected_step()
-        self.timeline.blockSignals(True)
-        self.timeline.clear()
-        current = None
-        for task in self.session.tasks:
-            parent = QtWidgets.QTreeWidgetItem([task.id, task.state.value, task.goal[:200]])
-            parent.setData(0, QtCore.Qt.UserRole, None)
-            self.timeline.addTopLevelItem(parent)
-            for step in task.steps:
-                item = QtWidgets.QTreeWidgetItem([step.id.split("/")[-1], step.outcome.value,
-                                                  step.message[:200]])
-                item.setData(0, QtCore.Qt.UserRole, step.id)
-                parent.addChild(item)
-                if step is selected or (selected is None and step is self._latest_step()):
-                    current = item
-            parent.setExpanded(task is self.task)
-        if current is not None:
-            self.timeline.setCurrentItem(current)
-        self.timeline.blockSignals(False)
-        self._show_step()
-
-    def _latest_step(self):
-        task = self.task
-        return task.steps[-1] if task is not None and task.steps else None
+        self.composer.set_running(running)
+        self.composer.set_options_enabled(not running)
+        for action in (self.brief_action, self.undo_step_action, self.undo_task_action,
+                       self.settings_action):
+            action.setEnabled(not running)
+        self.new_chat_button.setEnabled(not running)
+        self.info.setEnabled(not running)
+        if state is S.AWAITING_REVIEW:
+            self.action_bar.show_review()
+        elif state is S.PAUSED:
+            limit = task is not None and task.pending_step is not None \
+                and not self.conversation.can_execute
+            self.action_bar.show_paused("Paused after six steps." if limit else
+                                        "Paused. Continue resumes this task.")
+        else:
+            self.action_bar.hide_actions()
+        names = {S.CHECKING_PROVIDER: "Checking sign-in", S.THINKING: "Thinking",
+                 S.EXECUTING: "Running the step", S.APPLYING: "Applying changes"}
+        self.chat.set_status(names.get(state))
+        self._update_cards()
 
     def _find_step(self, step_id):
         for task in self.session.tasks:
@@ -855,33 +897,55 @@ class AssistantPanel(QtWidgets.QDockWidget):
                     return step
         return None
 
-    def _selected_step(self):
-        item = self.timeline.currentItem()
-        step_id = item.data(0, QtCore.Qt.UserRole) if item is not None else None
-        return self._find_step(step_id) if step_id else None
+    def _update_cards(self):
+        for task in self.session.tasks:
+            for step in task.steps:
+                self._update_card(step)
 
-    def _show_step(self):
-        step = self._selected_step()
-        if step is None:
+    def _update_card(self, step):
+        card = self.chat.card(step.id)
+        if card is None:
             return
-        self.code.setPlainText(step.code)
-        lines = ["Step {}: {}".format(step.id, step.outcome.value), "", step.message]
-        if step.changed:
-            lines += ["", "Changed objects:"]
-            for name in step.changed:
+        task = self.task
+        pending = task is not None and step is task.pending_step
+        if pending and task.state is S.AWAITING_REVIEW:
+            status = "review"
+        elif pending and task.state in (S.EXECUTING, S.APPLYING):
+            status = "running"
+        else:
+            status = step.outcome.value
+        candidate = self.session.undo_candidate()
+        executed = candidate.executed_steps() if candidate is not None else []
+        can_undo = bool(executed) and step is executed[-1] and not self.busy
+        lines, summary = [], ""
+        if step.changed and status in ("executed", "undone"):
+            created = [name for name in step.changed if name in step.added]
+            edited = [name for name in step.changed if name not in step.added]
+            parts = []
+            if created:
+                parts.append("Created " + ", ".join(created[:4]) + ("…" if len(created) > 4 else ""))
+            if edited:
+                parts.append(("edited " if created else "Edited ") + ", ".join(edited[:4])
+                             + ("…" if len(edited) > 4 else ""))
+            summary = " · ".join(parts)
+            for name in created:
+                lines.append("New: " + name)
+            for name in edited:
                 properties = step.properties.get(name)
-                lines.append("  {}{}".format(name, " ({})".format(", ".join(properties))
-                                             if properties else ""))
+                lines.append("Edited: {}{}".format(name, " ({})".format(", ".join(properties))
+                                                   if properties else ""))
         if step.result:
-            lines += ["", step.result]
-        self.details.setPlainText("\n".join(lines))
+            lines.append(step.result)
+        card.update_step(step.id.split("/")[-1], step.message, step.code, status,
+                         "\n".join(lines), can_run=status == "review", can_undo=can_undo,
+                         summary=summary)
 
     def _record(self, step, session=None):
         """Keep the execution ledger in step with what actually happened."""
         if step is not None:
             (session or self.session).conversation.log_step(step.id, step.outcome.value, step.message)
             if session is None or session is self.session:
-                self._render_timeline()
+                self._update_cards()
 
     def open_brief(self, overflow=False):
         """Open the design brief without blocking the GUI; returns the dialog."""
@@ -923,7 +987,6 @@ class AssistantPanel(QtWidgets.QDockWidget):
         task = self.session.start_task(prompt, message_id)
         task.snapshot = snapshot
         task.context = context  # Reused by the first request instead of a second capture.
-        self.code.clear()
         self.prompt.clear()
         self._log("You", prompt)
         self._request()
@@ -956,7 +1019,7 @@ class AssistantPanel(QtWidgets.QDockWidget):
         if not self.session.accepts(token, S.THINKING):
             return
         self._received_chars += len(text)
-        self.status.setText("Receiving the response… {:,} characters".format(self._received_chars))
+        self.chat.set_status("Receiving the response ({:,} characters)".format(self._received_chars))
 
     def _received(self, token, proposal):
         if not self.session.accepts(token, S.THINKING):
@@ -973,6 +1036,8 @@ class AssistantPanel(QtWidgets.QDockWidget):
             return
         step = task.add_step(token.request, proposal.message, proposal.python,
                              task.snapshot.fingerprint if task.snapshot is not None else "")
+        self.session.log("step", step.id)
+        self._show_entry("step", step.id)
         self._record(step)
         if not self.conversation.can_execute:
             self._transition(S.PAUSED)
@@ -1028,6 +1093,7 @@ class AssistantPanel(QtWidgets.QDockWidget):
                                    transaction="AI assistant " + step.id,
                                    on_create=lambda doc: self.registry.bind(session, doc))
             result, step.diagnostics, step.changed = outcome.text, outcome.diagnostics, outcome.changed
+            step.added = tuple(outcome.diagnostics.get("added", ()))
             success = True
         except (Exception, KeyboardInterrupt, SystemExit) as error:
             result = "{}: {}".format(type(error).__name__, error)
@@ -1052,9 +1118,9 @@ class AssistantPanel(QtWidgets.QDockWidget):
         """Automatic mode never falls back to GUI execution; offer review instead."""
         step.result = reason
         self._transition(S.AWAITING_REVIEW)
-        self._log("FreeCAD", reason + " Automatic steps cannot run this. Review the code and "
-                  "press Run reviewed code to run it inside FreeCAD (it cannot be stopped "
-                  "midway there), or press Stop.")
+        self._log("FreeCAD", reason + " Automatic steps cannot run this. Review the code, then "
+                  "press Run step to run it inside FreeCAD (it cannot be stopped midway "
+                  "there), or press Stop.")
 
     def _execute_in_worker(self, task, step):
         try:
@@ -1114,9 +1180,9 @@ class AssistantPanel(QtWidgets.QDockWidget):
         try:
             step.changed = tuple(apply_delta(doc, result["delta"]))
             doc.commitTransaction()
-            step.properties = {change["object"]: sorted(change["properties"]) + (
-                ["expressions"] if change.get("expressions") else [])
-                for change in result["delta"]["changed"]}
+            step.added = tuple(item["name"] for item in result["delta"]["added"])
+            step.properties = {change["object"]: visible_properties(change)
+                               for change in result["delta"]["changed"]}
         except Exception as failure:
             doc.abortTransaction()
             self._finish_step(task, step, False, "Could not apply the result: {}".format(failure))
@@ -1136,8 +1202,7 @@ class AssistantPanel(QtWidgets.QDockWidget):
         step.result = result
         if success:
             step.transaction = "AI assistant " + step.id
-        self._record(step)
-        self._log("FreeCAD", result)
+        self._record(step)  # The step's card shows its result.
         self.conversation.record_execution(success, result, step.diagnostics)
         task.snapshot = DocumentSnapshot.capture(App, Gui)
         if success and App.ActiveDocument is not None:
@@ -1252,10 +1317,7 @@ class AssistantPanel(QtWidgets.QDockWidget):
     def _clear(self):
         self._halt(self.session, S.STOPPED, "A new chat was started.")
         self.session.reset()
-        self.code.clear()
-        self.details.clear()
-        self.transcript.clear()
-        self._refresh()
+        self._render_session()
 
     def _undo(self, scope="step"):
         """Undo the last step or the whole task, only if exactly the assistant's

@@ -86,6 +86,7 @@ class Step:
     revision_after: str = ""
     undo_count_after: int = -1
     properties: dict = field(default_factory=dict)   # Object -> changed property names.
+    added: tuple = ()                                 # Objects the step created.
 
 
 class Task:

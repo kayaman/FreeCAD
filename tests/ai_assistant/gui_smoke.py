@@ -362,7 +362,7 @@ def run():
         assert doc.AIBox.Length.Value == 40 and other.getObject("AIBox") is None
         App.setActiveDocument(doc.Name)
         _wait_for(lambda: panel.session is own_session)
-        assert panel.session is own_session and "Make it 77 mm" in panel.transcript.toPlainText()
+        assert panel.session is own_session and "Make it 77 mm" in panel.chat.plain_text()
         before = len(fake.sent)
         panel._continue()
         assert task.state is S.THINKING and len(fake.sent) == before + 1

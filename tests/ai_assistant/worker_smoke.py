@@ -199,7 +199,7 @@ def _panel_checks(App, Gui, checks):
         task = send("Fit view", Proposal("Fit", "Gui.SendMsgToActiveView('ViewFit')\n"
                                                 "doc.Box.Length = 41\n"))
         helpers._wait_for(lambda: task.state is S.AWAITING_REVIEW, timeout=30)
-        assert doc.Box.Length.Value == 40 and "Run reviewed code" in panel.transcript.toPlainText()
+        assert doc.Box.Length.Value == 40 and "Run step" in panel.chat.plain_text()
         panel._run_reviewed()
         assert doc.Box.Length.Value == 41
         panel._stop()

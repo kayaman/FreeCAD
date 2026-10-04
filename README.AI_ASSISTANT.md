@@ -148,10 +148,32 @@ Every provider and worker process is supervised as a whole process tree.
 Temporary directories outlive every owned process and are removed on
 completion, timeout, cancellation, startup failure and application exit.
 
+## Using the panel
+
+The panel works like other chat assistants:
+
+- **Header:** a coloured dot and the provider's state (click it for Settings),
+  the document this chat belongs to, **＋** for a new chat, and **⋯** for Design
+  brief…, Undo last step, Undo task, Settings and About automatic steps.
+- **Conversation:** your messages appear as bubbles. Replies are rendered
+  markdown. Each modeling step is a card showing its status, collapsed to one
+  line; click it for the code (with Copy), the changed objects and the result.
+  Failed steps and steps waiting for review open by themselves, and the latest
+  undoable step has an **Undo** button. A line under the conversation shows what
+  is happening: thinking, running the step, applying changes.
+- **Composer:** type a request and press **Enter** to send; **Shift+Enter**
+  starts a new line. While a task runs, the send button becomes **Stop**. The
+  **Context** chip turns the model summary on or off. The **Auto / Review** chip
+  chooses between automatic steps and reviewing each step's code.
+- **Decisions:** when a task waits for you, a bar above the composer offers
+  **Run step** (review) or **Continue** (paused), next to **Stop**. Provider
+  problems such as a missing sign-in appear in the same place, with a Settings
+  button.
+- **Empty chat:** three example prompts you can click to start.
+
 ## Modeling
 
-Describe the model and include required dimensions, then press **Enter** to
-send (**Shift+Enter** starts a new line; the Send button also works), for example:
+Describe the model and include required dimensions, for example:
 
 > Create a parametric box 40 × 30 × 10 mm. Add a centered 5 mm cylindrical hole
 > through the 10 mm thickness.
@@ -194,9 +216,9 @@ measurements.
 
 ### Reviewed mode
 
-Turn automatic steps off to inspect each step's code and click **Run reviewed
-code**. Reviewed code runs inside FreeCAD after you have seen it and cannot be
-stopped midway.
+Switch the mode chip to **Review** to inspect each step's code, then click
+**Run step**. Reviewed code runs inside FreeCAD after you have seen it and cannot
+be stopped midway.
 
 ### Validation against existing errors
 
@@ -215,21 +237,21 @@ touched are reported separately and do not block unrelated edits; the provider
 is told they were not caused by its step. Rollback restores every value and
 shape, and the original error state.
 
-### Task timeline, Continue and Undo
+### Step cards, Continue and Undo
 
-The **Task timeline** lists every step of the document's tasks with its state:
+Every step appears in the conversation as a card with its state:
 
-- proposed
-- executed
+- proposed or running
+- awaiting review
+- done
 - failed
 - cancelled
-- rejected
+- not run
 - undone
 
-The Code and Result tabs show the step's code, the changed objects (and, for
-automatic steps, changed properties and expressions), the result and
-diagnostics. While the provider responds, a status line shows progress instead
-of partial output.
+Expanding a card shows the step's code, the changed objects (and, for automatic
+steps, changed properties and expressions), the result and diagnostics. While
+the provider responds, the status line shows progress instead of partial output.
 
 After six executions the task pauses. **Continue** grants another six for the
 same task, with its requirements and ledger. A step that already ran is never
@@ -245,8 +267,8 @@ told.
 
 ### Model context
 
-**Send model summary and selection** is enabled by default. It shares a bounded
-summary of the active document, ordered as follows:
+The **Context** chip is on by default. It shares a bounded summary of the active
+document, ordered as follows:
 
 1. selected objects
 2. their owning Bodies and Parts
@@ -275,7 +297,7 @@ empty model. If the selection itself does not fit, the panel asks you to select
 less instead of sending a partial selection. Free text, file paths, raw shapes
 and screenshots are never sent automatically.
 
-Turning the checkbox off stops sending new summaries. Messages and summaries
+Turning the Context chip off stops sending new summaries. Messages and summaries
 already sent remain part of the chat; **New chat** starts clean.
 
 ### Design memory and session lifetime
@@ -338,6 +360,14 @@ It uses fake providers and disposable documents only. It restores the original
 active document and selection, and fails if any temporary directory or child
 process is left behind.
 
+The chat widgets have their own tests, which need PySide. Run them headlessly
+with FreeCAD's Qt:
+
+```sh
+flatpak run --env=QT_QPA_PLATFORM=offscreen --command=FreeCADCmd \
+    org.freecad.FreeCAD /absolute/path/to/tests/ai_assistant/qt_tests.py
+```
+
 - `gui_smoke`
   - late responses after every interruption
   - pause and resume
@@ -376,8 +406,8 @@ plan allowance.
 | Linux, FreeCAD 1.1.4 Flatpak | Copilot CLI 1.0.91 | unknown (no status command) | failed: "no authentication information found" inside the Flatpak sandbox | not run |
 | Windows, macOS | all | untested | untested | untested |
 
-The unit suite (107 tests) and all four integration checks pass in that
-environment.
+The unit suite (107 tests, plus 11 chat widget tests run headlessly) and all
+four integration checks pass in that environment.
 
 Copilot keeps its login in the system credential store, which the FreeCAD
 Flatpak may not be able to reach. A host-side probe got past authentication but

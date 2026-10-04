@@ -62,11 +62,13 @@ def run():
         step("doc.Base.Length = 25\ndoc.Base.setExpression('Width', 'Length / 5')", "Resize base")
         step("doc.addObject('Part::Cylinder', 'C').Radius = 3", "Add C")
         finish(task)
-        rows = panel.timeline.topLevelItem(panel.timeline.topLevelItemCount() - 1)
-        assert rows.childCount() == 3 and all(rows.child(i).text(1) == "executed" for i in range(3))
-        panel.timeline.setCurrentItem(rows.child(1))
-        assert "doc.Base.Length = 25" in panel.code.toPlainText()
-        details = panel.details.toPlainText()
+        cards = [panel.chat.card(s.id) for s in task.steps]
+        assert all(card is not None and card.status == "executed" for card in cards)
+        assert not any(card.expanded for card in cards)  # Done steps stay collapsed.
+        assert cards[-1].undo_button.isVisibleTo(cards[-1]) and not cards[0].undo_button.isVisibleTo(cards[0])
+        cards[1].expand()
+        assert "doc.Base.Length = 25" in cards[1].code_text()
+        details = cards[1].details_text()
         assert "Base (" in details and "Length" in details and "expressions" in details, details
         assert doc.Base.Width.Value == 5
         panel._undo("task")
@@ -74,7 +76,8 @@ def run():
         assert doc.Base.Length.Value == 20 and doc.Base.ExpressionEngine == []
         assert all(s.outcome is Outcome.UNDONE for s in task.steps)
         assert '"undone_steps"' in panel.conversation.messages[-1]["content"]
-        checks.append("three-step task inspected in the timeline, then fully undone to its "
+        assert all(panel.chat.card(s.id).status == "undone" for s in task.steps)
+        checks.append("three-step task inspected in its step cards, then fully undone to its "
                       "starting geometry and parameters")
 
         def manual_edit(height):
@@ -138,8 +141,8 @@ def run():
         step("doc.addObject('Part::Box', 'S1')")
         panel._stop()
         assert task.state is S.STOPPED and doc.getObject("S1") is not None
-        rows = panel.timeline.topLevelItem(panel.timeline.topLevelItemCount() - 1)
-        assert rows.text(1) == "stopped" and rows.child(0).text(1) == "executed"
+        assert panel.chat.card(task.steps[0].id).status == "executed"
+        assert "Stopped." in panel.chat.plain_text()
         own = panel.session
         other = App.newDocument("AIAssistantTimelineOther")
         wait_for(lambda: panel.session is not own)

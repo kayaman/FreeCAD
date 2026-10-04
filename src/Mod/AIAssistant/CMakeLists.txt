@@ -3,6 +3,7 @@ set(AIAssistant_Scripts
     Init.py
     InitGui.py
     freecad_ai/__init__.py
+    freecad_ai/chat_view.py
     freecad_ai/core.py
     freecad_ai/document.py
     freecad_ai/execution.py
@@ -23,6 +24,7 @@ fc_target_copy_resource(AIAssistantScripts
 install(FILES Init.py InitGui.py DESTINATION Mod/AIAssistant)
 install(FILES
     freecad_ai/__init__.py
+    freecad_ai/chat_view.py
     freecad_ai/core.py
     freecad_ai/document.py
     freecad_ai/execution.py

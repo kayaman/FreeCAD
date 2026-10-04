@@ -191,6 +191,7 @@ def validate_step(doc, before, inputs_before, recompute_error=None):
     report["geometry_errors"] = geometry_checks(doc, changed)
     report["recompute_error"] = recompute_error
     report["changed"] = changed[:MAX_DIAGNOSTICS]
+    report["added"] = [name for name in changed if name not in inputs_before][:MAX_DIAGNOSTICS]
     report["ok"] = bool(report["ok"] and not report["geometry_errors"] and not recompute_error)
     return report["ok"], report
 
